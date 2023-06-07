@@ -2,17 +2,22 @@
 // "C" - вызывает режим смены номера ( загорается "+" в низу экрана)
 // "D" - сохраняет номер, если нажать "С" в ходе набора номера выходит из режима нечего не сохраняя
 
-
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <microDS18B20.h>
 #include <GyverOLED.h>
 #include <Keypad.h>
 
-#define pin_DS 4                    // датчик температуры
-#define pin_IR 5                    // ИК датчик
-#define pin_RX 2                    // пин RX Arduino (TX SIM800L)
-#define pin_TX 3                    // пин TX Arduino (RX SIM800L)
+#define HC_SR04 1 // 1 HC-SR04 задействован IR выключен, 0 наоборот
+
+#define pin_DS 4                     // датчик температуры
+#define pin_IR 5                     // ИК датчик
+#define pin_RX 2                     // пин RX Arduino (TX SIM800L)
+#define pin_TX 3                     // пин TX Arduino (RX SIM800L)
+#define P_TRIG 3                     // пин trig
+#define P_ECHO 2                     // пин echo
+#define D_CM 50                      // после какого растояния  щитать открыто
+#define D_TIK 10                     // ко-во проверок для принятия результата
 #define SMSopen "Okno open"          // Текст СМС сообщения при открытии
 #define SMSclose "Okno close"        // Текст СМС сообщения при закрытии
 #define SMS_T_Text "Temperature is " // Текст СМС сообщения о температуре
@@ -21,30 +26,29 @@
 #define DOWN_T -3                    // Нижняя граница температуры
 String numberSMS = "+79281455513";   // Номер абонента для СМС
 
-//настройки клавы
+// настройки клавы
 const byte ROWS = 4;
 const byte COLS = 4;
-byte rowPins[ROWS] = { 12, 11, 10, 9 };
-byte colPins[COLS] = { A0, A1, A2, A3 };
+byte rowPins[ROWS] = {12, 11, 10, 9};
+byte colPins[COLS] = {A0, A1, A2, A3};
 char hexaKeys[ROWS][COLS] = {
-  { '1', '2', '3', 'A' },
-  { '4', '5', '6', 'B' },
-  { '7', '8', '9', 'C' },
-  { '*', '0', '#', 'D' }
-};
+    {'1', '2', '3', 'A'},
+    {'4', '5', '6', 'B'},
+    {'7', '8', '9', 'C'},
+    {'*', '0', '#', 'D'}};
 
 Keypad Key = Keypad(makeKeymap(hexaKeys), rowPins, colPins, ROWS, COLS);
 MicroDS18B20<pin_DS> sensor;
 SoftwareSerial SIM800(pin_RX, pin_TX);
 GyverOLED<SSD1306_128x64, OLED_NO_BUFFER> oled;
 
-String _response = "";               // Переменная для хранения ответа модуля
-String inputString;                  // хранение сообщения
-int threashold = 30;                 // Порог срабатывания
-int status = 10;
-int T_SMS = 0; // Последняя отправленная температура
+String _response = ""; // Переменная для хранения ответа модуля
+String inputString;    // хранение сообщения
+int threashold = 30;   // Порог срабатывания
+int T_SMS = 0;         // Последняя отправленная температура
 int T;
-uint32_t tm; // переменная таймера
+uint32_t tm0; // переменная таймера
+uint32_t tm1; // переменная таймера
 char key;
 
 int DS();
@@ -56,12 +60,15 @@ void CheckTemperature();
 void sendSMS(String text, String phone);
 void olled(int temp, String tel);
 void nomer();
+bool hc_sensor(uint8_t trig, uint8_t echo, uint8_t d_cm, uint8_t d_tik);
 
 void setup()
 {
   Serial.begin(115000); // Скорость обмена данными с компьютером
   SIM800.begin(9600);   // Скорость обмена данными с модемом
   pinMode(pin_IR, INPUT_PULLUP);
+  pinMode(P_TRIG, OUTPUT);
+  pinMode(P_ECHO, INPUT);
 
   Serial.println("Start!");
   sendATCommand("AT", true);                       // Отправили AT для настройки скорости обмена данными
@@ -80,16 +87,27 @@ void setup()
 void loop()
 {
 
-  if (millis() - tm >= 5000)
+  if (millis() - tm0 >= 5000)
   {
-    tm = millis();
+    tm0 = millis();
     T = DS();
     olled(T, numberSMS);
     CheckTemperature();
     read_SMS();
   }
 
-  distances();
+  if (millis() - tm1 >= 100)
+  {
+    tm1 = millis();
+    if (HC_SR04)
+    {
+      hc_sensor(P_TRIG, P_ECHO, D_CM, D_TIK);
+    }
+    else
+    {
+      distances();
+    }
+  }
 
   key = Key.getKey();
   if (key != NO_KEY)
@@ -138,7 +156,10 @@ int DS()
 
 void distances()
 {
+  static uint8_t status = 10;
+
   int cm = digitalRead(pin_IR);
+
   if (cm)
   {
     if (status != 1)
@@ -286,6 +307,66 @@ void nomer()
     case '9':
       new_tel += key;
       olled(0, new_tel);
+    }
+  }
+}
+
+bool hc_sensor(uint8_t trig, uint8_t echo, uint8_t d_cm, uint8_t d_tik)
+{
+
+  static uint8_t tik = d_tik;
+  static uint8_t rez = 0;
+  static uint8_t status = 10;
+  static bool rezultat;
+
+  tik--;
+
+  digitalWrite(trig, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+  int cm = pulseIn(echo, HIGH) / 58;
+
+  if (cm <= d_cm)
+  {
+    ++rez;
+  }
+  else
+  {
+    --rez;
+  }
+  if (!tik)
+  {
+    tik = d_tik;
+    if (rez == d_tik)
+    {
+      rez = 0;
+      rezultat = true;
+    }
+    else
+    {
+      rez = 0;
+      rezultat = false;
+    }
+  }
+
+  if (!rezultat)
+  {
+    if (status != 1)
+    {
+      status = 1;
+      String smsText = SMS_T_Text + String(T) + " " + SMSopen;
+      sendSMS(smsText, numberSMS); // Open
+      Serial.println(F("Окно открыто"));
+    }
+  }
+  else
+  {
+    if (status != 0)
+    {
+      status = 0;
+      String smsText = SMS_T_Text + String(T) + " " + SMSclose;
+      sendSMS(smsText, numberSMS); // Close
+      Serial.println(F("Окно закрыто"));
     }
   }
 }
