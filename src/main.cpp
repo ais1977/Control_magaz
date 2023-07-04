@@ -60,6 +60,7 @@ void CheckTemperature();
 void sendSMS(String text, String phone);
 void olled(int temp, String tel);
 void nomer();
+void updateSerial();
 bool hc_sensor(uint8_t trig, uint8_t echo, uint8_t d_cm, uint8_t d_tik);
 
 void setup()
@@ -70,10 +71,21 @@ void setup()
   pinMode(P_TRIG, OUTPUT);
   pinMode(P_ECHO, INPUT);
 
-  Serial.println("Start!");
-  sendATCommand("AT", true);                       // Отправили AT для настройки скорости обмена данными
-  _response = sendATCommand("AT+CLIP=1", true);    // Включаем АОН
-  _response = sendATCommand("AT+CMGF=1;&W", true); // Включаем текстовый режима SMS (Text mode) и сразу сохраняем значение (AT&W)!
+  // Serial.println("Start!");
+  // sendATCommand("AT", true);                       // Отправили AT для настройки скорости обмена данными
+  // _response = sendATCommand("AT+CLIP=1", true);    // Включаем АОН
+  // _response = sendATCommand("AT+CMGF=1;&W", true); // Включаем текстовый режима SMS (Text mode) и сразу сохраняем значение (AT&W)!
+
+  Serial.println("Initializing...");     // Печать текста
+  delay(10000);                           // Пауза 1 с
+ 
+  SIM800.println("AT");                // Отправка команды AT
+  updateSerial();
+
+  SIM800.println("AT+CMGF=1");         // Выбирает формат SMS
+  updateSerial();
+  SIM800.println("AT+CNMI=1,2,0,0,0"); // Обработка вновь поступившие SMS
+  updateSerial();
 
   oled.init();  // инициализация
   oled.clear(); // очистить дисплей (или буфер)
@@ -252,15 +264,13 @@ void read_SMS()
     delay(100);
     while (SIM800.available()) // Проверяем, есть ли еще данные.
     {
-      inputString += SIM800.read(); // Записываем считанный байт в массив inputString
+      inputString += char ( SIM800.read() ) ; // Записываем считанный байт в массив inputString
     }
     delay(100);
-    Serial.println(inputString);           // Отправка в "Мониторинг порта" считанные данные
     inputString.toUpperCase();             // Меняем все буквы на заглавные
     if (inputString.indexOf(SMS_cod) > -1) // Проверяем полученные данные
     {
-      String smsText = SMS_T_Text + T;
-      Serial.println(smsText);
+      String smsText = SMS_T_Text + String (T);
       sendSMS(smsText, numberSMS); // Отправка текущей температуры
     }
     delay(100);
@@ -368,5 +378,19 @@ bool hc_sensor(uint8_t trig, uint8_t echo, uint8_t d_cm, uint8_t d_tik)
       sendSMS(smsText, numberSMS); // Close
       Serial.println(F("Окно закрыто"));
     }
+  }
+}
+
+
+void updateSerial()
+{
+  delay(500);                            // Пауза 500 мс
+  while (Serial.available()) 
+  {
+    SIM800.write(Serial.read());       // Переадресация с последовательного порта SIM800L на последовательный порт Arduino IDE
+  }
+  while(SIM800.available()) 
+  {
+    Serial.write(SIM800.read());       // Переадресация c Arduino IDE на последовательный порт SIM800L
   }
 }
